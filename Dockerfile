@@ -1,20 +1,32 @@
-# Use an official Python runtime as a parent image
-FROM python:2.7-slim
+FROM microsoft/windowsservercore
 
-# Set the working directory to /app
-WORKDIR /app
+LABEL maintainer "Perry Skountrianos"
 
-# Copy the current directory contents into the container at /app
-ADD . /app
+# SQL Server 2016 vNext:
+ENV exe "https://go.microsoft.com/fwlink/?linkid=835677"
+ENV box "https://go.microsoft.com/fwlink/?linkid=835679"
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --trusted-host pypi.python.org -r requirements.txt
+ENV sa_password _
+ENV attach_dbs "[]"
+ENV ACCEPT_EULA _
 
-# Make port 80 available to the world outside this container
-EXPOSE 80
+SHELL ["powershell", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
 
-# Define environment variable
-ENV NAME World
+# make install files accessible
+COPY start.ps1 /
+WORKDIR /
 
-# Run app.py when the container launches
-CMD ["python", "app.py"]
+RUN Invoke-WebRequest -Uri $env:box -OutFile SQL.box ; \
+        Invoke-WebRequest -Uri $env:exe -OutFile SQL.exe ; \
+        Start-Process -Wait -FilePath .\SQL.exe -ArgumentList /qs, /x:setup ; \
+        .\setup\setup.exe /q /ACTION=Install /INSTANCENAME=MSSQLSERVER /FEATURES=SQLEngine /UPDATEENABLED=0 /SQLSVCACCOUNT='NT AUTHORITY\System' /SQLSYSADMINACCOUNTS='BUILTIN\ADMINISTRATORS' /TCPENABLED=1 /NPENABLED=0 /IACCEPTSQLSERVERLICENSETERMS ; \
+        Remove-Item -Recurse -Force SQL.exe, SQL.box, setup
+
+RUN stop-service MSSQLSERVER ; \
+        set-itemproperty -path 'HKLM:\software\microsoft\microsoft sql server\mssql14.MSSQLSERVER\mssqlserver\supersocketnetlib\tcp\ipall' -name tcpdynamicports -value '' ; \
+        set-itemproperty -path 'HKLM:\software\microsoft\microsoft sql server\mssql14.MSSQLSERVER\mssqlserver\supersocketnetlib\tcp\ipall' -name tcpport -value 1433 ; \
+        set-itemproperty -path 'HKLM:\software\microsoft\microsoft sql server\mssql14.MSSQLSERVER\mssqlserver\' -name LoginMode -value 2 ;
+
+HEALTHCHECK CMD [ "sqlcmd", "-Q", "select 1" ]
+
+CMD .\start -sa_password $env:sa_password -ACCEPT_EULA $env:ACCEPT_EULA -attach_dbs \"$env:attach_dbs\" -Verbose
